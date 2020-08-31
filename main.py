@@ -8,8 +8,10 @@ import asyncio
 from typing import List
 import json
 import threading
-from time import sleep
 import signal
+import re
+import sys
+
 
 WOTD_SERVER_CHANNELS = None
 if os.path.exists("servers.json"):
@@ -23,24 +25,34 @@ WOTD_WORD_CLASS = "otd-item-headword__word"
 WOTD_WORD_POS_CLASS = "otd-item-headword__pos"  # definition resides here
 WOTD_WORD_URL_CLASS = "otd-item-headword__anchors-link"
 
-run_threads = True
-threads = []
+SUPPORTED_FORMATTING = {'italic': "*{}*",
+                        'bold': "**{}**"}
+
+channel_id_fmt = re.compile(r"<#(\d+)>")
+
+
+sleep_event = threading.Event()
+run_thread = True
+poll_thread = None
 
 OLD_WOTD = None
 bot = commands.Bot(command_prefix="!wotd ")
 
 
 class Word:
-    def __init__(self, word: str = None, definition: str = None, pos: List[str] = None,
-                 example: str = None, url: str = None):
+    def __init__(self, word: str = None, url: str = None, extras: List[str] = None):
         self._word = word
-        self._definition = definition
-        self._pos = pos
-        self._example = example
         self._url = url
+        self._extras = extras
 
     def __copy__(self):
-        return Word(self._word, self._definition, self._pos, self.example, self._url)
+        return Word(self._word, self.url, self._extras)
+
+    def __eq__(self, other):
+        return other and self._word == other.word and self._url == other.url
+
+    def __str__(self):
+        return "{} [{}]: {}".format(self._word, self._url, self._extras)
 
     @property
     def word(self):
@@ -53,123 +65,120 @@ class Word:
         self._word = word
 
     @property
-    def definition(self):
-        return self._definition
-
-    @definition.setter
-    def definition(self, definition):
-        if self._definition:
-            raise RuntimeError("Cannot override definition. Make a new Word.")
-        self._definition = definition
-
-    @property
-    def pos(self):
-        return self._pos
-
-    @pos.setter
-    def pos(self, pos):
-        if self._pos:
-            raise RuntimeError("Cannot override word. Make a new Word.")
-        self._pos = pos
-
-    @property
-    def example(self):
-        return self._example
-
-    @example.setter
-    def example(self, example):
-        self._example = example
-
-    @property
     def url(self):
         return self._url
 
     @url.setter
     def url(self, url):
+        if self._url:
+            raise RuntimeError("Cannot override URL. Make a new Word.")
         self._url = url
+
+    @property
+    def extras(self):
+        return self._extras
+
+    @extras.setter
+    def extras(self, extras: List[str]):
+        self._extras = extras
 
     def to_embed(self):
         e = Embed(title="Word of the Day")
         e.set_thumbnail(url=bot.user.avatar_url)
-        e.add_field(name="Word", value=self._word)
-        pos_value = ", ".join(self._pos)
-        e.add_field(name="Part(s) of Speech", value=pos_value)
-        e.add_field(name="Definition", value=self._definition)
-        e.add_field(name="Example Usage", value=self._example)
-        if self._url:
-            e.add_field(name="More info...", value="..can be found [here]({}).".format(self._url))
+        e.add_field(name="Word", value="[{}]({})".format(self._word, self._url))
+        meaning_value = "\n".join(self._extras)
+        e.add_field(name="Meaning", value=meaning_value)
         return e
 
 
 @bot.event
 async def on_ready():
+    global poll_thread
     print("WotDBot has entered chat; id: {0}".format(bot.user))
     for guild in bot.guilds:
         # gather any new channels to post in
-        if guild.id not in WOTD_SERVER_CHANNELS:
+        if str(guild.id) not in WOTD_SERVER_CHANNELS:
             # fetch default, accessible channel in server
             if type(guild.channels[0]) is discord.CategoryChannel:
                 WOTD_SERVER_CHANNELS[guild.id] = guild.channels[0].channels[0].id
             else:
                 WOTD_SERVER_CHANNELS[guild.id] = guild.channels[0].id
         # start posting!
-        t = threading.Thread(target=wotd_loop, args=(asyncio.get_event_loop(), guild))
-        t.start()
-        threads.append(t)
+    if not poll_thread:
+        poll_thread = threading.Thread(target=wotd_loop, args=(asyncio.get_event_loop(),))
+        poll_thread.start()
 
 
-@bot.event
-async def on_disconnect():
-    global run_threads
-    run_threads = False
-    for t in threads:
-        t.join()
+def onexit():
+    global run_thread
+    run_thread = False
+    sleep_event.set()
+    poll_thread.join()
     with open("servers.json", "w") as _:
         json.dump(WOTD_SERVER_CHANNELS, _)
+    sys.exit(0)
 
 
-def wotd_loop(loop, guild):
-    while run_threads:
-        get_and_send_wotd(loop, guild)
-        sleep(24 * 60 * 60)
-
-
-def get_and_send_wotd(loop, guild):
-    global OLD_WOTD
-    soup = None
+def get_wotd() -> Word:
     # Retrieve the current WotD
     with urllib.request.urlopen(WOTD_URL) as response:
         contents = response.read()
     # Parse it
     soup = bs4.BeautifulSoup(contents, 'html.parser')
-    word = soup.find("div", class_=WOTD_WORD_CLASS).find("h1").contents[0]
-    if word == OLD_WOTD:
-        # We haven't gotten a new WOTD yet
-        sleep(600)
-        return
-    OLD_WOTD = word
-    pos_def_div = soup.find("div", class_=WOTD_WORD_POS_CLASS)
-    pos = pos_def_div.find("span", class_="luna-pos").contents[0]
-    def_ex_block = tuple(pos_def_div.find_all("p")[-1].stripped_strings)
-    last_def_part = [i for i in range(len(def_ex_block)) if ":" in def_ex_block[i]][0]
-    definition = " ".join(def_ex_block[:last_def_part + 1])[:-1]
-    example = " ".join(def_ex_block[last_def_part + 1:])
+    word = soup.find("div", class_=WOTD_WORD_CLASS).stripped_strings.__next__()
     url = soup.find("a", class_=WOTD_WORD_URL_CLASS)['href']
+    pos_def_div = soup.find("div", class_=WOTD_WORD_POS_CLASS).find_all("p")
+    extras = []
+    for el in pos_def_div:
+        formatting = "{}"
+        if el.span:
+            decorator = set(el.span["class"]).intersection(set(SUPPORTED_FORMATTING.keys()))
+            if len(decorator) > 0:
+                formatting = SUPPORTED_FORMATTING[list(decorator)[0]]
+        extras.append(formatting.format(el.stripped_strings.__next__()))
     # Format it into an Embed
-    wotd_embed = Word(word, definition, [pos], example, url).to_embed()
+    w = Word(word, url, extras)
+    print(w)
+    return w
+
+
+@bot.event
+async def on_disconnect():
+    onexit()
+
+
+def wotd_loop(loop):
+    global OLD_WOTD
+    while run_thread:
+        sleep_event.clear()
+        word = get_wotd()
+        if word == OLD_WOTD:
+            # We haven't gotten a new WOTD yet
+            sleep_event.wait(600)  # wait 10 minutes and try again
+            continue
+        OLD_WOTD = word
+        send_coros = [send_wotd(guild, word.to_embed()) for guild in WOTD_SERVER_CHANNELS.keys()]
+        asyncio.set_event_loop(loop)
+        asyncio.gather(*send_coros)
+
+
+async def send_wotd(guild, wotd_embed):
     wotd_embed.set_footer(text="Change the bot's channel with the `!wotd channel` command.")
-    asyncio.run_coroutine_threadsafe(bot.get_channel(WOTD_SERVER_CHANNELS[guild.id]).send(embed=wotd_embed), loop)
+    await bot.get_channel(WOTD_SERVER_CHANNELS[guild]).send(embed=wotd_embed)
 
 
 @bot.command()
 async def channel(ctx: commands.Context, chan: str):
-    pass
+    chan_id = int(channel_id_fmt.match(chan).group(1))
+    WOTD_SERVER_CHANNELS[ctx.guild.id] = chan_id
+    await ctx.send("Changed channel to {}".format(chan))
 
 
-def onexit(sig, frame):
-    asyncio.run(on_disconnect())
+def exit_handler(sig, frame):
+    print("Exiting!")
+    onexit()
 
 
-signal.signal(signal.SIGINT, onexit)
+signal.signal(signal.SIGINT, exit_handler)
 token = os.environ.get("WOTD_SECRET")
 bot.run(token)
