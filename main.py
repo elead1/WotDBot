@@ -11,6 +11,7 @@ import threading
 import signal
 import re
 import sys
+import pickle
 
 
 WOTD_SERVER_CHANNELS = None
@@ -35,7 +36,7 @@ sleep_event = threading.Event()
 run_thread = True
 poll_thread = None
 
-OLD_WOTD = None
+
 bot = commands.Bot(command_prefix="!wotd ")
 
 
@@ -91,6 +92,14 @@ class Word:
         return e
 
 
+if os.path.exists("lastword.pickle"):
+    with open("lastword.pickle", "rb") as _:
+        OLD_WOTD = pickle.load(_)
+else:
+    OLD_WOTD = None
+print(OLD_WOTD)
+
+
 @bot.event
 async def on_ready():
     global poll_thread
@@ -116,6 +125,8 @@ def onexit():
     poll_thread.join()
     with open("servers.json", "w") as _:
         json.dump(WOTD_SERVER_CHANNELS, _)
+    with open("lastword.pickle", "wb") as _:
+        pickle.dump(OLD_WOTD, _)
     sys.exit(0)
 
 
@@ -131,7 +142,7 @@ def get_wotd() -> Word:
     extras = []
     for el in pos_def_div:
         formatting = "{}"
-        if el.span:
+        if el.span and "luna-example" not in el.span["class"]:  # TODO: Fix parsing for example text
             decorator = set(el.span["class"]).intersection(set(SUPPORTED_FORMATTING.keys()))
             if len(decorator) > 0:
                 formatting = SUPPORTED_FORMATTING[list(decorator)[0]]
