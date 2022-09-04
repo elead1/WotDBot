@@ -36,8 +36,9 @@ sleep_event = threading.Event()
 run_thread = True
 poll_thread = None
 
+intents = discord.Intents.default()
 
-bot = commands.Bot(command_prefix="!wotd ")
+bot = commands.Bot(command_prefix="!wotd ", intents=intents)
 
 
 class Word:
@@ -191,5 +192,8 @@ def exit_handler(sig, frame):
 
 
 signal.signal(signal.SIGINT, exit_handler)
-token = os.environ.get("WOTD_SECRET")
+if os.path.exists("../secrets"):
+    with open("../secrets") as _:
+        secrets = json.load(_)
+token = secrets["WOTD"]
 bot.run(token)
