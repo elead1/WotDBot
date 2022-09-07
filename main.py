@@ -86,7 +86,7 @@ class Word:
 
     def to_embed(self):
         e = Embed(title="Word of the Day")
-        e.set_thumbnail(url=bot.user.avatar_url)
+        e.set_thumbnail(url=bot.user.avatar)
         e.add_field(name="Word", value="[{}]({})".format(self._word, self._url))
         meaning_value = "\n".join(self._extras)
         e.add_field(name="Meaning", value=meaning_value)
@@ -154,9 +154,9 @@ def get_wotd() -> Word:
     return w
 
 
-@bot.event
-async def on_disconnect():
-    onexit()
+# @bot.event
+# async def on_disconnect():
+#     onexit()
 
 
 def wotd_loop(loop):
