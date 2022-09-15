@@ -12,6 +12,8 @@ import signal
 import re
 import sys
 import pickle
+import requests
+import datetime
 
 
 WOTD_SERVER_CHANNELS = None
@@ -26,6 +28,8 @@ WOTD_WORD_CLASS = "otd-item-headword__word"
 WOTD_WORD_POS_CLASS = "otd-item-headword__pos"  # definition resides here
 WOTD_WORD_URL_CLASS = "otd-item-headword__anchors-link"
 
+RANDWORD_URL = "https://random-word-api.herokuapp.com/word?"
+
 SUPPORTED_FORMATTING = {'italic': "*{}*",
                         'bold': "**{}**"}
 
@@ -39,6 +43,11 @@ poll_thread = None
 intents = discord.Intents.default()
 
 bot = commands.Bot(command_prefix="!wotd ", intents=intents)
+
+def EMBED_TEMPLATE():
+    e = Embed(title="Word of the Day")
+    e.set_thumbnail(url=bot.user.avatar)
+    return e
 
 
 class Word:
@@ -85,8 +94,7 @@ class Word:
         self._extras = extras
 
     def to_embed(self):
-        e = Embed(title="Word of the Day")
-        e.set_thumbnail(url=bot.user.avatar)
+        e = EMBED_TEMPLATE()
         e.add_field(name="Word", value="[{}]({})".format(self._word, self._url))
         meaning_value = "\n".join(self._extras)
         e.add_field(name="Meaning", value=meaning_value)
@@ -173,6 +181,21 @@ def wotd_loop(loop):
         asyncio.set_event_loop(loop)
         asyncio.gather(*send_coros)
 
+def wordle_seed_loop(loop):
+    global LAST_WORDLE_SEND
+    while run_thread:
+        if LAST_WORDLE_SEND - datetime.datetime():
+            pass
+        embed = get_rand_word()
+
+
+def get_rand_word(as_embed=True) ->  Embed:
+    with requests.get(RANDWORD_URL, params={'length': 5}) as resp:
+        word = resp.json()[0]
+        e = EMBED_TEMPLATE()
+        e.add_field(name="Wordle Starter", value=f"{word}")
+        return e
+
 
 async def send_wotd(guild, wotd_embed):
     wotd_embed.set_footer(text="Change the bot's channel with the `!wotd channel` command.")
@@ -184,6 +207,12 @@ async def channel(ctx: commands.Context, chan: str):
     chan_id = int(channel_id_fmt.match(chan).group(1))
     WOTD_SERVER_CHANNELS[ctx.guild.id] = chan_id
     await ctx.send("Changed channel to {}".format(chan))
+
+@bot.command()
+async def define(ctx: commands.Context, query: str):
+    definition = resp.json()
+    embed = parse_def(definition)
+    ctx.send(embed=embed)
 
 
 def exit_handler(sig, frame):
