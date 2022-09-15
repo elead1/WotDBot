@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 from discord import Embed
 import asyncio
+import aiohttp
 from typing import List
 import json
 import threading
