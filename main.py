@@ -178,5 +178,5 @@ if os.path.exists("../secrets"):
     with open("../secrets") as _:
         secrets = json.load(_)
 # token = secrets["WOTD"]
-token = "NzQ1NzcxMzEwMTg1MTg1MzEy.GJYOnr.TRcAoqbFI-cWln6bX9jH1q8OTlT9nuBf9xgn_0"
+token = 
 bot.run(token)
