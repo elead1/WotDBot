@@ -11,7 +11,7 @@ import re
 import sys
 import requests
 import datetime
-import word
+from wotdbot import word, utils
 
 settings = None 
 if os.path.exists("settings.json"):
@@ -24,7 +24,7 @@ else:
     WOTD_SERVER_CHANNELS = {}
 
 try:
-    OLD_WOTD = settings["prev_wotd"]
+    OLD_WOTD = word.Word.fromJson(json.loads(settings["prev_wotd"]))
 except KeyError:
     OLD_WOTD = None
 print(OLD_WOTD)
@@ -49,14 +49,8 @@ intents = discord.Intents.default()
 
 bot = commands.Bot(command_prefix="!wotd ", intents=intents)
 
-def EMBED_TEMPLATE():
-    e = Embed(title="Word of the Day")
-    e.set_thumbnail(url=bot.user.avatar)
-    return e
-
 @bot.event
 async def on_ready():
-    global poll_thread
     print("WotDBot has entered chat; id: {0}".format(bot.user))
     for guild in bot.guilds:
         # gather any new channels to post in
@@ -84,10 +78,10 @@ async def get_wotd() -> word.Word:
     global OLD_WOTD
     # Retrieve the current WotD
     with requests.get(WOTD_URL) as response:
-        contents = response.read()
+        contents = response.content
     # Parse it
     soup = bs4.BeautifulSoup(contents, 'html.parser')
-    word = soup.find("div", class_=WOTD_WORD_CLASS).stripped_strings.__next__()
+    w = soup.find("div", class_=WOTD_WORD_CLASS).stripped_strings.__next__()
     url = soup.find("a", class_=WOTD_WORD_URL_CLASS)['href']
     pos_def_div = soup.find("div", class_=WOTD_WORD_POS_CLASS).find_all("p")
     extras = []
@@ -98,35 +92,20 @@ async def get_wotd() -> word.Word:
             if len(decorator) > 0:
                 formatting = SUPPORTED_FORMATTING[list(decorator)[0]]
         extras.append(formatting.format(el.stripped_strings.__next__()))
-    w = word.Word(word, url, extras)
+    w = word.Word(w, url, extras)
     # We haven't gotten a new WotD yet
     if w == OLD_WOTD:
         await asyncio.sleep(600) # wait 10 minutes and try again
         return await get_wotd()
     else:
         OLD_WOTD = w
-        settings["prev_wotd"] = OLD_WOTD
+        settings["prev_wotd"] = OLD_WOTD.toJson()
         return w
 
 
 # @bot.event
 # async def on_disconnect():
 #     onexit()
-
-
-# def wotd_loop(loop):
-#     global OLD_WOTD
-#     while run_thread:
-#         sleep_event.clear()
-#         word = get_wotd()
-#         if word == OLD_WOTD:
-#             # We haven't gotten a new WOTD yet
-#             sleep_event.wait(600)  # wait 10 minutes and try again
-#             continue
-#         OLD_WOTD = word
-#         send_coros = [send_wotd(guild, word.to_embed()) for guild in WOTD_SERVER_CHANNELS.keys()]
-#         asyncio.set_event_loop(loop)
-#         asyncio.gather(*send_coros)
 
 # def wordle_seed_loop(loop):
 #     global LAST_WORDLE_SEND
@@ -138,16 +117,16 @@ async def get_wotd() -> word.Word:
 
 def get_rand_word(as_embed=True) ->  Embed:
     with requests.get(RANDWORD_URL, params={'length': 5}) as resp:
-        word = resp.json()[0]
-        e = EMBED_TEMPLATE()
-        e.add_field(name="Wordle Starter", value=f"{word}")
+        w = resp.json()[0]
+        e = utils.EMBED_TEMPLATE(bot)
+        e.add_field(name="Wordle Starter", value=f"{w}")
         return e
 
 
 async def send_wotd(guild):
     global tasks
-    word = await get_wotd()
-    wotd_embed = word.to_embed()
+    w = await get_wotd()
+    wotd_embed = w.to_embed(bot)
     wotd_embed.set_footer(text="Change the bot's channel with the `!wotd channel` command.")
     await bot.get_channel(WOTD_SERVER_CHANNELS[guild]).send(embed=wotd_embed)
     t = asyncio.create_task(send_wotd(guild))
@@ -177,6 +156,5 @@ signal.signal(signal.SIGINT, exit_handler)
 if os.path.exists("../secrets"):
     with open("../secrets") as _:
         secrets = json.load(_)
-# token = secrets["WOTD"]
-token = 
+token = secrets["WOTD"]
 bot.run(token)

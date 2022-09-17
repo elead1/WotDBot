@@ -1,8 +1,1 @@
-{
-    "servers": {
-        "702162398878105631": {
-            "channel": 745783919227437200,
-            "wordle_mode": false
-        }
-    }
-}
+{"servers": {"702162398878105631": {"channel": 745783919227437200, "wordle_mode": false}}, "prev_wotd": "{\"_word\": \"doughty\", \"_url\": \"https://www.dictionary.com/browse/doughty\", \"_extras\": [\"*adjective*\", \"steadfastly courageous and resolute; valiant.\"]}"}

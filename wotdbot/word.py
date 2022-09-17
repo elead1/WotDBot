@@ -1,5 +1,6 @@
 from typing import List
-from main import EMBED_TEMPLATE
+import json
+from .utils import EMBED_TEMPLATE
 
 class Word:
     def __init__(self, word: str = None, url: str = None, extras: List[str] = None):
@@ -44,9 +45,16 @@ class Word:
     def extras(self, extras: List[str]):
         self._extras = extras
 
-    def to_embed(self):
-        e = EMBED_TEMPLATE()
+    def to_embed(self, bot):
+        e = EMBED_TEMPLATE(bot)
         e.add_field(name="Word", value="[{}]({})".format(self._word, self._url))
         meaning_value = "\n".join(self._extras)
         e.add_field(name="Meaning", value=meaning_value)
         return e
+
+    def toJson(self):
+        return json.dumps(self, default=lambda o: o.__dict__)
+
+    @staticmethod
+    def fromJson(src: dict):
+        return Word(src["_word"], src["_url"], src["_extras"])
