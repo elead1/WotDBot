@@ -1,4 +1,6 @@
 import os
+from socketserver import ThreadingUnixStreamServer
+from tkinter import LAST
 import bs4
 import discord
 from discord.ext import commands
@@ -29,6 +31,14 @@ except KeyError:
     OLD_WOTD = None
 print(OLD_WOTD)
 
+try:
+    rw = datetime.datetime.fromtimestamp(settings["last_wordle"])
+    LAST_RANDWORD = datetime.datetime(rw.year, rw.month, rw.day, 0, 0, 0, 0, datetime.timezone.utc)
+except KeyError:
+    today = datetime.datetime.now()
+    yesterday = today + datetime.timedelta(days=-1)
+    LAST_RANDWORD = datetime.datetime(yesterday.year, yesterday.month, yesterday.date, 0, 0, 0, 0, datetime.timezone.utc)
+print(LAST_RANDWORD)
 
 WOTD_URL = "https://www.dictionary.com/e/word-of-the-day/"
 WOTD_WORD_CLASS = "otd-item-headword__word"
@@ -49,23 +59,50 @@ intents = discord.Intents.default()
 
 bot = commands.Bot(command_prefix="!wotd ", intents=intents)
 
+
+def find_store_accessible_channel(guild) -> int:
+    # fetch default, accessible channel in server
+    if type(guild.channels[0]) is discord.CategoryChannel:
+        WOTD_SERVER_CHANNELS[guild.id] = guild.channels[0].channels[0].id
+    else:
+        WOTD_SERVER_CHANNELS[guild.id] = guild.channels[0].id
+    settings["servers"][guild.id] = {"channel": WOTD_SERVER_CHANNELS[guild.id]}
+
 @bot.event
 async def on_ready():
     print("WotDBot has entered chat; id: {0}".format(bot.user))
     for guild in bot.guilds:
         # gather any new channels to post in
         if str(guild.id) not in WOTD_SERVER_CHANNELS:
-            # fetch default, accessible channel in server
-            if type(guild.channels[0]) is discord.CategoryChannel:
-                WOTD_SERVER_CHANNELS[guild.id] = guild.channels[0].channels[0].id
-            else:
-                WOTD_SERVER_CHANNELS[guild.id] = guild.channels[0].id
-            settings["servers"][guild.id] = {"channel": WOTD_SERVER_CHANNELS[guild.id]}
+            find_store_accessible_channel(guild)
     # create a coroutine per server
     for s in WOTD_SERVER_CHANNELS:
-        task = asyncio.create_task(send_wotd(s))
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+        configure_task(send_wotd(s), f"wotd-{guild.id}")
+        if settings["servers"][s]["send_wordle"]:
+            configure_task(send_wordle_seed(s), f"wordle-{guild.id}")
+
+
+@bot.event
+async def on_guild_join(guild):
+    find_store_accessible_channel(guild)
+    print(f"Joined server: {guild.id}, channel: {WOTD_SERVER_CHANNELS[guild.id]}")
+    configure_task(send_wotd(guild), f"wotd-{guild.id}")
+    await bot.get_channel(WOTD_SERVER_CHANNELS[guild.id]).send("`!wotd help` for command info.")
+
+
+@bot.event
+async def on_guild_remove(guild):
+    del WOTD_SERVER_CHANNELS[guild.id]
+    del settings["servers"][guild.id]
+    for t in tasks:
+        if f"{guild.id}" in t.get_name():
+            t.cancel()
+
+
+def configure_task(func, name):
+    task = asyncio.create_task(func, name=name)
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 def onexit():
@@ -75,7 +112,6 @@ def onexit():
 
 
 async def get_wotd() -> word.Word:
-    global OLD_WOTD
     # Retrieve the current WotD
     with requests.get(WOTD_URL) as response:
         contents = response.content
@@ -103,32 +139,36 @@ async def get_wotd() -> word.Word:
         return w
 
 
-# @bot.event
-# async def on_disconnect():
-#     onexit()
-
-# def wordle_seed_loop(loop):
-#     global LAST_WORDLE_SEND
-#     while run_thread:
-#         if LAST_WORDLE_SEND - datetime.datetime():
-#             pass
-#         embed = get_rand_word()
-
-
-def get_rand_word(as_embed=True) ->  Embed:
-    with requests.get(RANDWORD_URL, params={'length': 5}) as resp:
-        w = resp.json()[0]
-        e = utils.EMBED_TEMPLATE(bot)
-        e.add_field(name="Wordle Starter", value=f"{w}")
-        return e
+async def get_rand_word() -> Embed:
+    now = datetime.datetime.now(datetime.timezone.utc)
+    # if it has been more than 1 day since last word was sent, and it is past midnight UTC, get a new word
+    if (now - LAST_RANDWORD).total_seconds > (24 * 60 * 60) and (now.hour, now.minute, now.second) > (0, 0, 0):
+        with requests.get(RANDWORD_URL, params={'length': 5}) as resp:
+            LAST_RANDWORD = now
+            settings["last_wordle"] = now.timestamp()
+            w = resp.json()[0]
+            e = utils.EMBED_TEMPLATE(bot)
+            e.add_field(name="Wordle Starter", value=f"{w}")
+            return e
+    else:
+        await asyncio.sleep(600)  # wait 10 minutes and try again
+        return await get_rand_word()
 
 
 async def send_wotd(guild):
-    global tasks
-    w = await get_wotd()
-    wotd_embed = w.to_embed(bot)
-    wotd_embed.set_footer(text="Change the bot's channel with the `!wotd channel` command.")
-    await bot.get_channel(WOTD_SERVER_CHANNELS[guild]).send(embed=wotd_embed)
+    if settings["servers"][guild]["send_wordle"]:
+        w = await get_wotd()
+        wotd_embed = w.to_embed(bot)
+        wotd_embed.set_footer(text="Change the bot's channel with the `!wotd channel` command.")
+        await bot.get_channel(WOTD_SERVER_CHANNELS[guild]).send(embed=wotd_embed)
+        t = asyncio.create_task(send_wotd(guild))
+        tasks.add(t)
+
+
+async def send_wordle_seed(guild):
+    embed = await get_rand_word()
+    embed.set_footer(text="Change the bot's channel with the `!wotd channel` command.")
+    await bot.get_channel(WOTD_SERVER_CHANNELS[guild]).send(embed=embed)
     t = asyncio.create_task(send_wotd(guild))
     tasks.add(t)
 
@@ -140,11 +180,32 @@ async def channel(ctx: commands.Context, chan: str):
     settings["servers"][ctx.guild.id]["channel"] = chan_id
     await ctx.send("Changed channel to {}".format(chan))
 
+
+@bot.command()
+async def wordle(ctx: commands.Context):
+    settings["servers"][ctx.guild.id]["send_wordle"] = True
+    configure_task(send_wordle_seed(ctx.guild, f"wordle-{ctx.guild.id}"))
+    await ctx.send("WotDBot will post daily Wordle starters. Use command `!wotd nowordle` to disable.")
+
+
+@bot.command()
+async def nowordle(ctx: commands.Context):
+    settings["servers"][ctx.guild.id]["send_wordle"] = False
+    for t in tasks:
+        if t.get_name() == f"wordle-{ctx.guild.id}":
+            t.cancel()
+    await ctx.send("WotDBot will no longer post daily Wordle starters. Use command `!wotd wordle` to re-enable.")
+
 # @bot.command()
 # async def define(ctx: commands.Context, query: str):
 #     definition = resp.json()
 #     embed = parse_def(definition)
 #     ctx.send(embed=embed)
+
+
+# @bot.event
+# async def on_disconnect():
+#     onexit()
 
 
 def exit_handler(sig, frame):
